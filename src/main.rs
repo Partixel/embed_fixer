@@ -43,7 +43,7 @@ impl EventHandler for Handler {
         }
 
         if let Err(error) = msg.reply(&ctx.http, msg_builder.build()).await {
-            println!("embed_fixer errored when replying:\n{}", error);
+            eprintln!("embed_fixer errored when replying:\n{}", error);
             return;
         };
 
@@ -51,7 +51,7 @@ impl EventHandler for Handler {
             .edit(&ctx.http, EditMessage::new().suppress_embeds(true))
             .await
         {
-            println!(
+            eprintln!(
                 "embed_fixer errored when removing the original embed:\n{}",
                 error
             );
@@ -77,6 +77,6 @@ async fn main() {
         .expect("Err creating client");
 
     if let Err(why) = client.start().await {
-        println!("Client error: {why:?}");
+        eprintln!("Client error: {why:?}");
     }
 }
