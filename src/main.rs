@@ -157,6 +157,7 @@ async fn main() {
     let mut client = Client::builder(&token, intents)
         .framework(framework)
         .event_handler(Handler)
+        .status(OnlineStatus::Invisible)
         .await
         .expect("Err creating client");
 
