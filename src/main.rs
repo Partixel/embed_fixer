@@ -1,4 +1,6 @@
 use regex::Regex;
+
+use poise::{CreateReply, serenity_prelude as serenity};
 use serenity::all::{EditMessage, MessageBuilder};
 use serenity::async_trait;
 use serenity::model::channel::Message;
@@ -12,6 +14,11 @@ use std::sync::LazyLock;
 use dotenvy::dotenv;
 
 struct Handler;
+
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type Context<'a> = poise::Context<'a, Data, Error>;
+pub struct Data {}
+
 async fn handle_message(msg: &Message) -> Vec<String> {
     static RE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(https?:\/\/)(www\.)?([-a-zA-Z0-9@:%._\+~#=]{1,256}\.)*([-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6})\b([-a-zA-Z0-9()@:%_\+.~#?&\/=]*)").unwrap()
@@ -46,7 +53,7 @@ async fn handle_message(msg: &Message) -> Vec<String> {
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn message(&self, ctx: Context, mut msg: Message) {
+    async fn message(&self, ctx: serenity::Context, mut msg: Message) {
         if msg.author.bot {
             return;
         }
@@ -83,10 +90,63 @@ impl EventHandler for Handler {
     }
 }
 
+/// Echo content of a message
+#[poise::command(context_menu_command = "Fix embed")]
+pub async fn fixembed(
+    ctx: Context<'_>,
+    #[description = "Message to fix (enter a link or ID)"] msg: serenity::Message,
+) -> Result<(), Error> {
+    let new_embeds = handle_message(&msg).await;
+    if new_embeds.is_empty() {
+        ctx.send(
+            CreateReply::default()
+                .content("Can't find an x embed")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    ctx.send(
+        CreateReply::default()
+            .content(new_embeds.join("\n"))
+            .ephemeral(true),
+    )
+    .await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     #[cfg(debug_assertions)]
     dotenv().ok();
+
+    let framework = poise::Framework::builder()
+        .options(poise::FrameworkOptions {
+            commands: vec![fixembed()],
+            on_error: |error| {
+                Box::pin(async move {
+                    match error {
+                        poise::FrameworkError::ArgumentParse { error, .. } => {
+                            if let Some(error) = error.downcast_ref::<serenity::RoleParseError>() {
+                                println!("Found a RoleParseError: {:?}", error);
+                            } else {
+                                println!("Not a RoleParseError :(");
+                            }
+                        }
+                        other => poise::builtins::on_error(other).await.unwrap(),
+                    }
+                })
+            },
+            ..Default::default()
+        })
+        .setup(move |ctx, _ready, framework| {
+            Box::pin(async move {
+                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                Ok(Data {})
+            })
+        })
+        .build();
 
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
@@ -95,6 +155,7 @@ async fn main() {
         | GatewayIntents::MESSAGE_CONTENT;
 
     let mut client = Client::builder(&token, intents)
+        .framework(framework)
         .event_handler(Handler)
         .await
         .expect("Err creating client");
