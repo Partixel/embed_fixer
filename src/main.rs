@@ -90,7 +90,11 @@ impl EventHandler for Handler {
 }
 
 /// Echo content of a message
-#[poise::command(context_menu_command = "Fix embed")]
+#[poise::command(
+    context_menu_command = "Fix embed",
+    install_context = "Guild|User",
+    interaction_context = "Guild|BotDm|PrivateChannel"
+)]
 pub async fn fixembed(
     ctx: Context<'_>,
     #[description = "Message to fix (enter a link or ID)"] msg: serenity::Message,
@@ -107,7 +111,7 @@ pub async fn fixembed(
     }
 
     ctx.send(CreateReply::default().content(new_embeds).ephemeral(true))
-    .await?;
+        .await?;
     Ok(())
 }
 
