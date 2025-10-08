@@ -1,7 +1,7 @@
 use regex::Regex;
 
 use poise::{CreateReply, serenity_prelude as serenity};
-use serenity::all::{EditMessage, MessageBuilder};
+use serenity::OnlineStatus;
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
