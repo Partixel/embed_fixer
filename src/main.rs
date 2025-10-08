@@ -2,11 +2,13 @@ use regex::Regex;
 
 use poise::{CreateReply, serenity_prelude as serenity};
 use serenity::OnlineStatus;
+use serenity::all::EditMessage;
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
 
+use std::collections::HashMap;
 use std::env;
 use std::sync::LazyLock;
 
@@ -19,36 +21,38 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 pub struct Data {}
 
-async fn handle_message(msg: &Message) -> Vec<String> {
+async fn handle_message(msg: &Message) -> String {
     static RE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(https?:\/\/)(www\.)?([-a-zA-Z0-9@:%._\+~#=]{1,256}\.)*([-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6})\b([-a-zA-Z0-9()@:%_\+.~#?&\/=]*)").unwrap()
+    });
+
+    static REPLACEMENTS: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
+        HashMap::from([
+            ("x.com", "twitterez.com"),
+            ("twitter.com", "twitterez.com"),
+            ("reddit.com", "redditez.com"),
+        ])
     });
 
     let mut new_embeds: Vec<String> = Vec::new();
     for capture in RE.captures_iter(msg.content.as_str()) {
         if let Some(domain) = capture.get(4)
             && let domain = domain.as_str()
-            && (domain == "x.com" || domain == "twitter.com")
+            && REPLACEMENTS.contains_key(domain)
         {
             new_embeds.push(
                 capture
                     .iter()
                     .skip(1)
                     .flatten()
-                    .map(|c| {
-                        let c = c.as_str();
-                        if c == "x.com" || c == "twitter.com" {
-                            "fxtwitter.com"
-                        } else {
-                            c
-                        }
-                    })
+                    .map(|c| c.as_str())
+                    .map(|c| *REPLACEMENTS.get(c).unwrap_or(&c))
                     .collect(),
             );
         }
     }
 
-    new_embeds
+    new_embeds.join("\n")
 }
 
 #[async_trait]
@@ -63,12 +67,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let mut msg_builder = MessageBuilder::new();
-        for embed in new_embeds {
-            msg_builder.push(embed);
-        }
-
-        if let Err(error) = msg.reply(&ctx.http, msg_builder.build()).await {
+        if let Err(error) = msg.reply(&ctx.http, new_embeds).await {
             eprintln!("embed_fixer errored when replying:\n{}", error);
             return;
         };
@@ -100,18 +99,14 @@ pub async fn fixembed(
     if new_embeds.is_empty() {
         ctx.send(
             CreateReply::default()
-                .content("Can't find an x embed")
+                .content("Can't find a supported link")
                 .ephemeral(true),
         )
         .await?;
         return Ok(());
     }
 
-    ctx.send(
-        CreateReply::default()
-            .content(new_embeds.join("\n"))
-            .ephemeral(true),
-    )
+    ctx.send(CreateReply::default().content(new_embeds).ephemeral(true))
     .await?;
     Ok(())
 }
