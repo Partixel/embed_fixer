@@ -1,16 +1,48 @@
-#[cfg(debug_assertions)]
-use dotenvy::dotenv;
-
 use regex::Regex;
 use serenity::all::{EditMessage, MessageBuilder};
+use serenity::async_trait;
+use serenity::model::channel::Message;
+use serenity::model::gateway::Ready;
+use serenity::prelude::*;
+
 use std::env;
 use std::sync::LazyLock;
 
-use serenity::async_trait;
-use serenity::model::channel::Message;
-use serenity::prelude::*;
+#[cfg(debug_assertions)]
+use dotenvy::dotenv;
 
 struct Handler;
+async fn handle_message(msg: &Message) -> Vec<String> {
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(https?:\/\/)(www\.)?([-a-zA-Z0-9@:%._\+~#=]{1,256}\.)*([-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6})\b([-a-zA-Z0-9()@:%_\+.~#?&\/=]*)").unwrap()
+    });
+
+    let mut new_embeds: Vec<String> = Vec::new();
+    for capture in RE.captures_iter(msg.content.as_str()) {
+        if let Some(domain) = capture.get(4)
+            && let domain = domain.as_str()
+            && (domain == "x.com" || domain == "twitter.com")
+        {
+            new_embeds.push(
+                capture
+                    .iter()
+                    .skip(1)
+                    .flatten()
+                    .map(|c| {
+                        let c = c.as_str();
+                        if c == "x.com" || c == "twitter.com" {
+                            "fxtwitter.com"
+                        } else {
+                            c
+                        }
+                    })
+                    .collect(),
+            );
+        }
+    }
+
+    new_embeds
+}
 
 #[async_trait]
 impl EventHandler for Handler {
@@ -19,20 +51,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"twitter\.com").unwrap());
-
-        let mut new_embeds: Vec<String> = Vec::new();
-        for embed in msg.embeds.clone() {
-            if let Some(url) = embed.url
-                && RE.is_match(url.as_str())
-            {
-                new_embeds.push(format!(
-                    "[⠀]({})",
-                    RE.replace(url.as_str(), "fxtwitter.com")
-                ));
-            }
-        }
-
+        let new_embeds = handle_message(&msg).await;
         if new_embeds.is_empty() {
             return;
         }
@@ -57,6 +76,10 @@ impl EventHandler for Handler {
             );
             return;
         };
+    }
+
+    async fn ready(&self, _: serenity::Context, ready: Ready) {
+        println!("{} is connected! {:?}", ready.user.name, ready.guilds);
     }
 }
 
