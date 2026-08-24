@@ -23,7 +23,8 @@ pub struct Data {}
 
 struct UrlReplacement {
     new_domain: &'static str,
-    subdomain_to_remove: Option<&'static str>,
+    new_subdomain: Option<&'static str>,
+    subdomain_to_replace: Option<&'static str>,
     remove_embed: bool,
 }
 
@@ -34,11 +35,12 @@ async fn handle_message(msg: &Message) -> String {
 
     static REPLACEMENTS: LazyLock<HashMap<&str, UrlReplacement>> = LazyLock::new(|| {
         HashMap::from([
-            ("x.com", UrlReplacement { new_domain: "fxtwitter.com", subdomain_to_remove: None, remove_embed: true }),
-            ("twitter.com", UrlReplacement { new_domain: "fxtwitter.com", subdomain_to_remove: None, remove_embed: true }),
-            ("reddit.com", UrlReplacement { new_domain: "redditez.com", subdomain_to_remove: Some("old."), remove_embed: true }),
-            ("redd.it", UrlReplacement { new_domain: "redditez.com", subdomain_to_remove: None, remove_embed: true }),
-            ("instagram.com", UrlReplacement { new_domain: "kkinstagram.com", subdomain_to_remove: None, remove_embed: true }),
+            ("x.com", UrlReplacement { new_domain: "fxtwitter.com", new_subdomain: None, subdomain_to_replace: None, remove_embed: true }),
+            ("twitter.com", UrlReplacement { new_domain: "fxtwitter.com", new_subdomain: None, subdomain_to_replace: None, remove_embed: true }),
+            ("old.reddit.com", UrlReplacement { new_domain: "redditez.com", new_subdomain: Some(""), subdomain_to_replace: Some("old."), remove_embed: true }),
+            ("reddit.com", UrlReplacement { new_domain: "redditez.com", new_subdomain: None, subdomain_to_replace: None, remove_embed: true }),
+            ("redd.it", UrlReplacement { new_domain: "redditez.com", new_subdomain: None, subdomain_to_replace: None, remove_embed: true }),
+            ("instagram.com", UrlReplacement { new_domain: "kkinstagram.com", new_subdomain: None, subdomain_to_replace: None, remove_embed: true }),
         ])
     });
 
@@ -47,26 +49,44 @@ async fn handle_message(msg: &Message) -> String {
         println!("{:?}", capture);
         if let Some(domain) = capture.get(4)
             && let domain = domain.as_str()
-            && REPLACEMENTS.contains_key(domain)
         {
-            let repl = REPLACEMENTS.get(domain).unwrap();
-            new_embeds.push(
-                capture
-                    .iter()
-                    .skip(1)
-                    .flatten()
-                    .map(|c| c.as_str())
-                    .map(|c| {
-                        if c == domain {
-                            repl.new_domain
-                        } else if let Some(subdomain) = repl.subdomain_to_remove && c == subdomain {
-                            ""
-                        } else {
-                            c
-                        }
-                    })
-                    .collect(),
-            );
+            if let Some(subdomain) = capture.get(3) && let subdomain = subdomain.as_str() && let Some(repl) = REPLACEMENTS.get((subdomain.to_string() + domain).as_str()) {
+               new_embeds.push(
+                    capture
+                        .iter()
+                        .skip(1)
+                        .flatten()
+                        .map(|c| c.as_str())
+                        .map(|c| {
+                            if c == domain {
+                                repl.new_domain
+                            } else if let Some(subdomain) = repl.subdomain_to_replace && let Some(new_subdomain) = repl.new_subdomain && c == subdomain {
+                                new_subdomain
+                            } else {
+                                c
+                            }
+                        })
+                        .collect(),
+                );
+            } else if let Some(repl) = REPLACEMENTS.get(domain) {
+                new_embeds.push(
+                    capture
+                        .iter()
+                        .skip(1)
+                        .flatten()
+                        .map(|c| c.as_str())
+                        .map(|c| {
+                            if c == domain {
+                                repl.new_domain
+                            } else if let Some(subdomain) = repl.subdomain_to_replace && let Some(new_subdomain) = repl.new_subdomain && c == subdomain {
+                                new_subdomain
+                            } else {
+                                c
+                            }
+                        })
+                        .collect(),
+                );
+            }
         }
     }
 
