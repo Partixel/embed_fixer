@@ -21,11 +21,14 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 pub struct Data {}
 
-struct UrlReplacement {
+struct StaticReplacement {
     new_domain: &'static str,
     new_subdomain: Option<&'static str>,
-    subdomain_to_replace: Option<&'static str>,
-    remove_embed: bool,
+}
+
+enum UrlReplacementType {
+    Static(StaticReplacement),
+    Song(),
 }
 
 async fn handle_message(msg: &Message) -> (String, bool) {
@@ -33,62 +36,82 @@ async fn handle_message(msg: &Message) -> (String, bool) {
         Regex::new(r"(https?:\/\/)(www\.)?([-a-zA-Z0-9@:%._\+~#=]{1,256}\.)*([-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6})\b([-a-zA-Z0-9()@:%_\+.~#?&\/=]*)").unwrap()
     });
 
-    static REPLACEMENTS: LazyLock<HashMap<&str, UrlReplacement>> = LazyLock::new(|| {
+    static REPLACEMENTS: LazyLock<HashMap<&str, UrlReplacementType>> = LazyLock::new(|| {
         HashMap::from([
-            ("x.com", UrlReplacement { new_domain: "fxtwitter.com", new_subdomain: None, subdomain_to_replace: None, remove_embed: true }),
-            ("twitter.com", UrlReplacement { new_domain: "fxtwitter.com", new_subdomain: None, subdomain_to_replace: None, remove_embed: true }),
-            ("old.reddit.com", UrlReplacement { new_domain: "redditez.com", new_subdomain: Some(""), subdomain_to_replace: Some("old."), remove_embed: true }),
-            ("reddit.com", UrlReplacement { new_domain: "redditez.com", new_subdomain: None, subdomain_to_replace: None, remove_embed: true }),
-            ("redd.it", UrlReplacement { new_domain: "redditez.com", new_subdomain: None, subdomain_to_replace: None, remove_embed: true }),
-            ("instagram.com", UrlReplacement { new_domain: "kkinstagram.com", new_subdomain: None, subdomain_to_replace: None, remove_embed: true }),
+            ("x.com", UrlReplacementType::Static(StaticReplacement { new_domain: "fxtwitter.com", new_subdomain: None })),
+            ("twitter.com", UrlReplacementType::Static(StaticReplacement { new_domain: "fxtwitter.com", new_subdomain: None })),
+            ("old.reddit.com", UrlReplacementType::Static(StaticReplacement { new_domain: "redditez.com", new_subdomain: Some("") })),
+            ("reddit.com", UrlReplacementType::Static(StaticReplacement { new_domain: "redditez.com", new_subdomain: None })),
+            ("redd.it", UrlReplacementType::Static(StaticReplacement { new_domain: "redditez.com", new_subdomain: None })),
+            ("instagram.com", UrlReplacementType::Static(StaticReplacement { new_domain: "kkinstagram.com", new_subdomain: None })),
+            ("open.spotify.com", UrlReplacementType::Song()),
+            ("music.apple.com", UrlReplacementType::Song()),
         ])
     });
 
     let mut new_embeds: Vec<String> = Vec::new();
     let mut remove_embed = false;
     for capture in RE.captures_iter(msg.content.as_str()) {
-        println!("{:?}", capture);
         if let Some(domain) = capture.get(4)
             && let domain = domain.as_str()
         {
-            if let Some(subdomain) = capture.get(3) && let subdomain = subdomain.as_str() && let Some(repl) = REPLACEMENTS.get((subdomain.to_string() + domain).as_str()) {
-               new_embeds.push(
-                    capture
-                        .iter()
-                        .skip(1)
-                        .flatten()
-                        .map(|c| c.as_str())
-                        .map(|c| {
-                            if c == domain {
-                                remove_embed = repl.remove_embed;
-                                repl.new_domain
-                            } else if let Some(subdomain) = repl.subdomain_to_replace && let Some(new_subdomain) = repl.new_subdomain && c == subdomain {
-                                new_subdomain
-                            } else {
-                                c
-                            }
-                        })
-                        .collect(),
-                );
-            } else if let Some(repl) = REPLACEMENTS.get(domain) {
-                new_embeds.push(
-                    capture
-                        .iter()
-                        .skip(1)
-                        .flatten()
-                        .map(|c| c.as_str())
-                        .map(|c| {
-                            if c == domain {
-                                remove_embed = repl.remove_embed;
-                                repl.new_domain
-                            } else if let Some(subdomain) = repl.subdomain_to_replace && let Some(new_subdomain) = repl.new_subdomain && c == subdomain {
-                                new_subdomain
-                            } else {
-                                c
-                            }
-                        })
-                        .collect(),
-                );
+            let subdomain = if let Some(sub) = capture.get(3) && let sub = sub.as_str() {
+                Some(sub)
+            } else {
+                None
+            };
+
+            let (key, repl) = if let Some(subdomain) = subdomain && let subdomain = (subdomain.to_string() + domain) && let Some(re) = REPLACEMENTS.get(subdomain.as_str()) {
+               (Some(subdomain), Some(re))
+            } else if let Some(re) = REPLACEMENTS.get(domain) {
+                (Some(domain.to_string()), Some(re))
+            } else {
+                (None, None)
+            };
+
+            if let Some(key) = key && let key = key.as_str() && let Some(repl) = repl {
+                match repl {
+                    UrlReplacementType::Static(repl) => {
+                        new_embeds.push(
+                            capture
+                                .iter()
+                                .skip(1)
+                                .flatten()
+                                .map(|c| c.as_str())
+                                .map(|c| {
+                                    if c == domain {
+                                        remove_embed = true;
+                                        repl.new_domain
+                                    } else if let Some(subdomain) = subdomain && let Some(new_subdomain) = repl.new_subdomain && c == subdomain {
+                                        new_subdomain
+                                    } else {
+                                        c
+                                    }
+                                }
+                            ).collect(),
+                        );
+                    }
+                    UrlReplacementType::Song() => {
+                        new_embeds.push(
+                            capture
+                                .iter()
+                                .skip(1)
+                                .flatten()
+                                .map(|c| c.as_str())
+                                .map(|c| {
+                                    if c == domain {
+                                        remove_embed = false;
+                                        key
+                                    } else if let Some(subdomain) = subdomain && c == subdomain {
+                                        "odesli.co/https://"
+                                    } else {
+                                        c
+                                    }
+                                }
+                            ).collect(),
+                        );
+                    },
+                }
             }
         }
     }
@@ -140,7 +163,7 @@ pub async fn fixembed(
     ctx: Context<'_>,
     #[description = "Message to fix (enter a link or ID)"] msg: serenity::Message,
 ) -> Result<(), Error> {
-    let new_embeds = handle_message(&msg).await;
+    let (new_embeds, _) = handle_message(&msg).await;
     if new_embeds.is_empty() {
         ctx.send(
             CreateReply::default()
