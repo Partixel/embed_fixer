@@ -28,8 +28,8 @@ async fn handle_message(msg: &Message) -> String {
 
     static REPLACEMENTS: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
         HashMap::from([
-            ("x.com", "twitterez.com"),
-            ("twitter.com", "twitterez.com"),
+            ("x.com", "fxtwitter.com"),
+            ("twitter.com", "fxtwitter.com"),
             ("reddit.com", "redditez.com"),
             ("redd.it", "redditez.com"),
             ("kkinstagram.com", "instagram.com"),
