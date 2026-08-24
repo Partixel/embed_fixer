@@ -28,7 +28,7 @@ struct UrlReplacement {
     remove_embed: bool,
 }
 
-async fn handle_message(msg: &Message) -> String {
+async fn handle_message(msg: &Message) -> (String, bool) {
     static RE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(https?:\/\/)(www\.)?([-a-zA-Z0-9@:%._\+~#=]{1,256}\.)*([-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6})\b([-a-zA-Z0-9()@:%_\+.~#?&\/=]*)").unwrap()
     });
@@ -45,6 +45,7 @@ async fn handle_message(msg: &Message) -> String {
     });
 
     let mut new_embeds: Vec<String> = Vec::new();
+    let mut remove_embed = false;
     for capture in RE.captures_iter(msg.content.as_str()) {
         println!("{:?}", capture);
         if let Some(domain) = capture.get(4)
@@ -59,6 +60,7 @@ async fn handle_message(msg: &Message) -> String {
                         .map(|c| c.as_str())
                         .map(|c| {
                             if c == domain {
+                                remove_embed = repl.remove_embed;
                                 repl.new_domain
                             } else if let Some(subdomain) = repl.subdomain_to_replace && let Some(new_subdomain) = repl.new_subdomain && c == subdomain {
                                 new_subdomain
@@ -77,6 +79,7 @@ async fn handle_message(msg: &Message) -> String {
                         .map(|c| c.as_str())
                         .map(|c| {
                             if c == domain {
+                                remove_embed = repl.remove_embed;
                                 repl.new_domain
                             } else if let Some(subdomain) = repl.subdomain_to_replace && let Some(new_subdomain) = repl.new_subdomain && c == subdomain {
                                 new_subdomain
@@ -90,7 +93,7 @@ async fn handle_message(msg: &Message) -> String {
         }
     }
 
-    new_embeds.join("\n")
+    (new_embeds.join("\n"), remove_embed)
 }
 
 #[async_trait]
@@ -100,7 +103,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let new_embeds = handle_message(&msg).await;
+        let (new_embeds, remove_embed) = handle_message(&msg).await;
         if new_embeds.is_empty() {
             return;
         }
@@ -110,7 +113,7 @@ impl EventHandler for Handler {
             return;
         };
 
-        if let Err(error) = msg
+        if remove_embed && let Err(error) = msg
             .edit(&ctx.http, EditMessage::new().suppress_embeds(true))
             .await
         {
