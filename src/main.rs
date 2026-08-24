@@ -31,6 +31,8 @@ async fn handle_message(msg: &Message) -> String {
             ("x.com", "twitterez.com"),
             ("twitter.com", "twitterez.com"),
             ("reddit.com", "redditez.com"),
+            ("redd.it", "redditez.com"),
+            ("kkinstagram.com", "instagram.com"),
         ])
     });
 
