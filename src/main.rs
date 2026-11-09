@@ -1,230 +1,176 @@
-use regex::Regex;
-
-use poise::{CreateReply, serenity_prelude as serenity};
-use serenity::OnlineStatus;
-use serenity::all::EditMessage;
-use serenity::async_trait;
-use serenity::model::channel::Message;
-use serenity::model::gateway::Ready;
-use serenity::prelude::*;
-
-use std::collections::HashMap;
+use poise::serenity_prelude::{self as serenity, *};
 use std::env;
-use std::sync::LazyLock;
 
-#[cfg(debug_assertions)]
-use dotenvy::dotenv;
+mod music;
 
-struct Handler;
+const SUBDOMAINS: &[&str] = &["www.", "m.", "mobile.", "old.", "np."];
 
-type Error = Box<dyn std::error::Error + Send + Sync>;
-type Context<'a> = poise::Context<'a, Data, Error>;
-pub struct Data {}
+type Error = Box<serenity::Error>;
 
-struct StaticReplacement {
-    new_domain: &'static str,
-    new_subdomain: Option<&'static str>,
-}
-
-enum UrlReplacementType {
-    Static(StaticReplacement),
-    Song(),
-}
-
-async fn handle_message(msg: &Message) -> (String, bool) {
-    static RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(https?:\/\/)(www\.)?([-a-zA-Z0-9@:%._\+~#=]{1,256}\.)*([-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6})\b([-a-zA-Z0-9()@:%_\+.~#?&\/=]*)").unwrap()
-    });
-
-    static REPLACEMENTS: LazyLock<HashMap<&str, UrlReplacementType>> = LazyLock::new(|| {
-        HashMap::from([
-            ("x.com", UrlReplacementType::Static(StaticReplacement { new_domain: "fxtwitter.com", new_subdomain: None })),
-            ("twitter.com", UrlReplacementType::Static(StaticReplacement { new_domain: "fxtwitter.com", new_subdomain: None })),
-            ("old.reddit.com", UrlReplacementType::Static(StaticReplacement { new_domain: "redditez.com", new_subdomain: Some("") })),
-            ("reddit.com", UrlReplacementType::Static(StaticReplacement { new_domain: "redditez.com", new_subdomain: None })),
-            ("redd.it", UrlReplacementType::Static(StaticReplacement { new_domain: "redditez.com", new_subdomain: None })),
-            ("instagram.com", UrlReplacementType::Static(StaticReplacement { new_domain: "kkinstagram.com", new_subdomain: None })),
-            ("open.spotify.com", UrlReplacementType::Song()),
-            ("music.apple.com", UrlReplacementType::Song()),
-        ])
-    });
-
-    let mut new_embeds: Vec<String> = Vec::new();
-    let mut remove_embed = false;
-    for capture in RE.captures_iter(msg.content.as_str()) {
-        if let Some(domain) = capture.get(4)
-            && let domain = domain.as_str()
-        {
-            let subdomain = if let Some(sub) = capture.get(3) && let sub = sub.as_str() {
-                Some(sub)
-            } else {
-                None
-            };
-
-            let (key, repl) = if let Some(subdomain) = subdomain && let subdomain = (subdomain.to_string() + domain) && let Some(re) = REPLACEMENTS.get(subdomain.as_str()) {
-               (Some(subdomain), Some(re))
-            } else if let Some(re) = REPLACEMENTS.get(domain) {
-                (Some(domain.to_string()), Some(re))
-            } else {
-                (None, None)
-            };
-
-            if let Some(key) = key && let key = key.as_str() && let Some(repl) = repl {
-                match repl {
-                    UrlReplacementType::Static(repl) => {
-                        new_embeds.push(
-                            capture
-                                .iter()
-                                .skip(1)
-                                .flatten()
-                                .map(|c| c.as_str())
-                                .map(|c| {
-                                    if c == domain {
-                                        remove_embed = true;
-                                        repl.new_domain
-                                    } else if let Some(subdomain) = subdomain && let Some(new_subdomain) = repl.new_subdomain && c == subdomain {
-                                        new_subdomain
-                                    } else {
-                                        c
-                                    }
-                                }
-                            ).collect(),
-                        );
-                    }
-                    UrlReplacementType::Song() => {
-                        new_embeds.push(
-                            capture
-                                .iter()
-                                .skip(1)
-                                .flatten()
-                                .map(|c| c.as_str())
-                                .map(|c| {
-                                    if c == domain {
-                                        remove_embed = false;
-                                        key
-                                    } else if let Some(subdomain) = subdomain && c == subdomain {
-                                        "odesli.co/https://"
-                                    } else {
-                                        c
-                                    }
-                                }
-                            ).collect(),
-                        );
-                    },
-                }
+/// Every http(s) link in `text`, skipping `<links>` the user already suppressed.
+fn links(text: &str) -> Vec<reqwest::Url> {
+    text.split_whitespace()
+        .filter_map(|word| {
+            let start = word.find("http")?;
+            if word[..start].ends_with('<') {
+                return None;
             }
-        }
-    }
-
-    (new_embeds.join("\n"), remove_embed)
+            let url = word[start..].trim_end_matches(['.', ',', '!', '?', ';', ':', ')', ']', '>']);
+            reqwest::Url::parse(url)
+                .ok()
+                .filter(|url| matches!(url.scheme(), "http" | "https"))
+        })
+        .collect()
 }
 
-#[async_trait]
-impl EventHandler for Handler {
-    async fn message(&self, ctx: serenity::Context, mut msg: Message) {
-        if msg.author.bot {
-            return;
-        }
-
-        let (new_embeds, remove_embed) = handle_message(&msg).await;
-        if new_embeds.is_empty() {
-            return;
-        }
-
-        if let Err(error) = msg.reply(&ctx.http, new_embeds).await {
-            eprintln!("embed_fixer errored when replying:\n{}", error);
-            return;
-        };
-
-        if remove_embed && let Err(error) = msg
-            .edit(&ctx.http, EditMessage::new().suppress_embeds(true))
-            .await
-        {
-            eprintln!(
-                "embed_fixer errored when removing the original embed:\n{}",
-                error
-            );
-            return;
-        };
-    }
-
-    async fn ready(&self, _: serenity::Context, ready: Ready) {
-        println!("{} is connected! {:?}", ready.user.name, ready.guilds);
-    }
+/// A link to a site with a better embedder, pointed at that embedder.
+fn rewrite(url: &reqwest::Url) -> Option<String> {
+    let host = url.host_str()?;
+    let host = SUBDOMAINS
+        .iter()
+        .find_map(|s| host.strip_prefix(s))
+        .unwrap_or(host);
+    let embedder = match host {
+        "x.com" | "twitter.com" => "fxtwitter.com",
+        "reddit.com" | "redd.it" => "redditez.com",
+        "instagram.com" => "kkinstagram.com",
+        _ => return None,
+    };
+    let mut fixed = url.clone();
+    fixed.set_scheme("https").ok()?;
+    fixed.set_host(Some(embedder)).ok()?;
+    fixed.set_port(None).ok()?;
+    Some(fixed.into())
 }
 
-/// Echo content of a message
+/// Everything we replace Discord's own (flaky) embeds with: the rewritten links, then music cards.
+async fn fixes(text: &str) -> Vec<poise::CreateReply> {
+    let urls = links(text);
+    let rewritten = urls
+        .iter()
+        .filter_map(rewrite)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!rewritten.is_empty())
+        .then(|| poise::CreateReply::default().content(rewritten))
+        .into_iter()
+        .chain(music::cards(&urls).await)
+        .collect()
+}
+
+async fn on_event(
+    ctx: poise::FrameworkContext<'_, (), Error>,
+    event: &serenity::FullEvent,
+) -> Result<(), Error> {
+    if let serenity::FullEvent::Message { new_message: msg } = event
+        && !msg.author.bot
+    {
+        let http = &ctx.serenity_context.http;
+        let mut sent = false;
+        for reply in fixes(&msg.content).await {
+            let reply = reply
+                .reply(true)
+                .allowed_mentions(CreateAllowedMentions::new());
+            let message = reply.to_prefix(msg.into());
+            let result = msg.channel_id.send_message(http, message).await;
+            sent |= result
+                .inspect_err(|e| eprintln!("embed_fixer couldn't send a reply: {e}"))
+                .is_ok();
+        }
+        // Last, so if every reply failed the original embed is still there.
+        if sent {
+            let hide = EditMessage::new().suppress_embeds(true);
+            let result = msg.channel_id.edit_message(http, msg.id, hide).await;
+            result
+                .inspect_err(|e| eprintln!("embed_fixer couldn't hide the original embed: {e}"))
+                .ok();
+        }
+    }
+    Ok(())
+}
+
 #[poise::command(
     context_menu_command = "Fix embed",
     install_context = "Guild|User",
     interaction_context = "Guild|BotDm|PrivateChannel"
 )]
-pub async fn fixembed(
-    ctx: Context<'_>,
-    #[description = "Message to fix (enter a link or ID)"] msg: serenity::Message,
-) -> Result<(), Error> {
-    let (new_embeds, _) = handle_message(&msg).await;
-    if new_embeds.is_empty() {
-        ctx.send(
-            CreateReply::default()
-                .content("Can't find a supported link")
-                .ephemeral(true),
-        )
-        .await?;
-        return Ok(());
+async fn fixembed(ctx: poise::Context<'_, (), Error>, msg: Message) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+    let replies = fixes(&msg.content).await;
+    if replies.is_empty() {
+        ctx.say("Can't find a supported link").await?;
     }
-
-    ctx.send(CreateReply::default().content(new_embeds).ephemeral(true))
-        .await?;
+    for reply in replies {
+        ctx.send(reply).await?;
+    }
     Ok(())
 }
 
 #[tokio::main]
 async fn main() {
     #[cfg(debug_assertions)]
-    dotenv().ok();
+    dotenvy::dotenv().ok();
+
+    music::init();
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![fixembed()],
-            on_error: |error| {
-                Box::pin(async move {
-                    match error {
-                        poise::FrameworkError::ArgumentParse { error, .. } => {
-                            if let Some(error) = error.downcast_ref::<serenity::RoleParseError>() {
-                                println!("Found a RoleParseError: {:?}", error);
-                            } else {
-                                println!("Not a RoleParseError :(");
-                            }
-                        }
-                        other => poise::builtins::on_error(other).await.unwrap(),
-                    }
-                })
-            },
+            event_handler: |ctx, event| Box::pin(on_event(ctx, event)),
             ..Default::default()
         })
-        .setup(move |ctx, _ready, framework| {
+        .setup(|ctx, ready, framework| {
             Box::pin(async move {
+                println!("{} is connected!", ready.user.name);
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data {})
+                Ok(())
             })
         })
         .build();
 
-    let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
-
+    let token = env::var("DISCORD_TOKEN").expect("Expected a DISCORD_TOKEN in the environment");
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
 
-    let mut client = Client::builder(&token, intents)
+    Client::builder(&token, intents)
         .framework(framework)
-        .event_handler(Handler)
         .status(OnlineStatus::Invisible)
         .await
-        .expect("Err creating client");
+        .expect("Err creating client")
+        .start()
+        .await
+        .expect("Client error");
+}
 
-    if let Err(why) = client.start().await {
-        eprintln!("Client error: {why:?}");
+#[cfg(test)]
+mod tests {
+    use super::{links, rewrite};
+
+    fn rewritten(text: &str) -> Vec<String> {
+        links(text).iter().filter_map(rewrite).collect()
+    }
+
+    #[test]
+    fn rewrites() {
+        assert_eq!(
+            rewritten("https://www.x.com/a/status/1?s=2 and https://old.reddit.com/r/x/"),
+            [
+                "https://fxtwitter.com/a/status/1?s=2",
+                "https://redditez.com/r/x/"
+            ]
+        );
+        assert_eq!(rewritten("see https://x.com."), ["https://fxtwitter.com/"]);
+        for ignored in [
+            "<https://x.com/a>",
+            "https://example.com",
+            "https://open.spotify.com/track/1",
+        ] {
+            assert!(rewritten(ignored).is_empty(), "{ignored}");
+        }
+        assert_eq!(
+            links("listen https://open.spotify.com/track/1?si=a").len(),
+            1
+        );
     }
 }
