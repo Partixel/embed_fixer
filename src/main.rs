@@ -67,9 +67,9 @@ async fn on_event(
     {
         let http = &ctx.serenity_context.http;
         let mut sent = false;
-        for reply in fixes(&msg.content).await {
+        for (i, reply) in fixes(&msg.content).await.into_iter().enumerate() {
             let reply = reply
-                .reply(true)
+                .reply(i == 0)
                 .allowed_mentions(CreateAllowedMentions::new());
             let message = reply.to_prefix(msg.into());
             let result = msg.channel_id.send_message(http, message).await;
